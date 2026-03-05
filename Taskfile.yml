@@ -1,0 +1,93 @@
+version: "3"
+
+vars:
+  BACKEND_DIR: backendDashboard
+  FRONTEND_DIR: dashboard-boti
+  VENV_DIR: "{{.BACKEND_DIR}}/.venv"
+  BACKEND_PORT: "8000"
+  FRONTEND_PORT: "5173"
+
+tasks:
+  default:
+    desc: Lista de tareas disponibles
+    cmds:
+      - task --list
+
+  # -------------------------
+  # Backend
+  # -------------------------
+  backend:env:
+    desc: Crea backendDashboard/.env a partir de .env.example si no existe
+    cmds:
+      - |
+        if [ ! -f "{{.BACKEND_DIR}}/.env" ]; then
+          cp "{{.BACKEND_DIR}}/.env.example" "{{.BACKEND_DIR}}/.env"
+          echo "✅ Creado {{.BACKEND_DIR}}/.env desde .env.example (rellena las variables)."
+        else
+          echo "ℹ️ {{.BACKEND_DIR}}/.env ya existe."
+        fi
+
+  backend:venv:
+    desc: Crea el venv del backend si no existe (usa python3 o python)
+    cmds:
+      - |
+        if [ ! -d "{{.VENV_DIR}}" ]; then
+          PYTHON_BIN="$(command -v python3 || true)"
+          if [ -z "$PYTHON_BIN" ]; then
+            PYTHON_BIN="$(command -v python || true)"
+          fi
+          if [ -z "$PYTHON_BIN" ]; then
+            echo "❌ No se encontró python3 ni python en PATH."
+            exit 1
+          fi
+
+          "$PYTHON_BIN" -m venv "{{.VENV_DIR}}"
+          echo "✅ Venv creado en {{.VENV_DIR}}"
+        else
+          echo "ℹ️ Venv ya existe en {{.VENV_DIR}}"
+        fi
+
+  backend:install:
+    desc: Instala dependencias del backend (pip del venv)
+    deps: [backend:venv]
+    cmds:
+      - |
+        "{{.VENV_DIR}}/bin/python" -m pip install --upgrade pip
+        "{{.VENV_DIR}}/bin/python" -m pip install -r "{{.BACKEND_DIR}}/requirements.txt"
+
+  backend:dev:
+    desc: Arranca FastAPI (uvicorn --reload) en :8000 (desde backendDashboard/)
+    deps: [backend:env, backend:install]
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - .venv/bin/python -m uvicorn backendDashboard:app --reload --host 0.0.0.0 --port {{.BACKEND_PORT}}
+
+  # -------------------------
+  # Frontend
+  # -------------------------
+  frontend:install:
+    desc: Instala dependencias del frontend (npm)
+    dir: "{{.FRONTEND_DIR}}"
+    cmds:
+      - npm install
+
+  frontend:dev:
+    desc: Arranca Vite en :5173
+    deps: [frontend:install]
+    dir: "{{.FRONTEND_DIR}}"
+    cmds:
+      - npm run dev -- --port {{.FRONTEND_PORT}} --host
+
+  # -------------------------
+  # Ambos (en paralelo)
+  # -------------------------
+  dev:
+    desc: Arranca backend + frontend en paralelo
+    cmds:
+      - task -p backend:dev frontend:dev
+
+  install:
+    desc: Instala deps de backend y frontend
+    cmds:
+      - task backend:install
+      - task frontend:install

@@ -1,5 +1,4 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import HTMLResponse
 import httpx
 import json
 import traceback
@@ -19,7 +18,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173"],  # React/Vite
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -28,7 +27,7 @@ app.add_middleware(
 # =========================
 # CONFIGURACIÓN
 # =========================
-OPEN_WEBUI_URL = os.getenv("OPEN_WEBUI_URL")  
+OPEN_WEBUI_URL = os.getenv("OPEN_WEBUI_URL")
 API_KEY = os.getenv("OPEN_WEBUI_API_KEY")
 MODEL_ID = os.getenv("MODEL_ID")
 PORT = int(os.getenv("PORT", 8000))
@@ -37,9 +36,12 @@ PORT = int(os.getenv("PORT", 8000))
 # VALIDACIÓN AL ARRANCAR
 # =========================
 missing_vars = []
-if not OPEN_WEBUI_URL: missing_vars.append("OPEN_WEBUI_URL")
-if not API_KEY: missing_vars.append("OPEN_WEBUI_API_KEY")
-if not MODEL_ID: missing_vars.append("MODEL_ID")
+if not OPEN_WEBUI_URL:
+    missing_vars.append("OPEN_WEBUI_URL")
+if not API_KEY:
+    missing_vars.append("OPEN_WEBUI_API_KEY")
+if not MODEL_ID:
+    missing_vars.append("MODEL_ID")
 
 if missing_vars:
     print("\n" + "=" * 60)
@@ -51,35 +53,42 @@ if missing_vars:
     raise RuntimeError("Faltan variables de entorno obligatorias.")
 
 # =========================
+# ENDPOINT DE SALUD (opcional)
+# =========================
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+# =========================
 # FILTRO: EXTRACCIÓN LIMPIA
 # =========================
 def extraer_conversaciones_limpias(raw_data):
     chats_limpios = []
-    
+
     if isinstance(raw_data, list):
         for chat in raw_data:
             titulo = chat.get("title", "Chat sin título")
-            
+
             # Formato nuevo: messages directamente en el chat
             mensajes = chat.get("messages", [])
-            
+
             # Formato antiguo: chat.history.messages (dict)
             if not mensajes:
                 mensajes_dict = chat.get("chat", {}).get("history", {}).get("messages", {})
                 mensajes = list(mensajes_dict.values())
                 mensajes.sort(key=lambda x: x.get("timestamp", 0))
-            
+
             dialogo = []
             for msg in mensajes:
                 rol = msg.get("role")
                 texto = msg.get("content")
                 if rol and texto and isinstance(texto, str):
                     dialogo.append(f"[{rol.upper()}]: {texto}")
-            
+
             if dialogo:
                 texto_chat = f"--- {titulo.upper()} ---\n" + "\n".join(dialogo)
                 chats_limpios.append(texto_chat)
-                
+
     return "\n\n".join(chats_limpios)
 
 # =========================
@@ -96,22 +105,39 @@ async def process_json(file: UploadFile = File(...)):
         # 1. Filtramos la "basura" y nos quedamos solo con los guiones de chat
         texto_limpio = extraer_conversaciones_limpias(raw_data)
 
-        # 2. Recortamos a 15000 caracteres. Como ahora el texto es puro, 
-        # caben muchísimas más conversaciones reales antes de llegar al límite.
+        # 2. Recortamos a 15000 caracteres.
         resumen_datos = texto_limpio[:15000]
 
         if not resumen_datos.strip():
-            raise HTTPException(status_code=400, detail="No se encontró texto de chat válido en el archivo. ¿Estás seguro de que es una exportación de chats?")
+            raise HTTPException(
+                status_code=400,
+                detail="No se encontró texto de chat válido en el archivo. ¿Estás seguro de que es una exportación de chats?"
+            )
 
         headers = {
             "Authorization": f"Bearer {API_KEY}",
             "Content-Type": "application/json"
         }
 
-        # 3. Enviamos el texto limpio, sin prompts extra (el Agente usa el suyo)
+        mensaje_sistema = (
+            "Eres un AUDITOR DE DATOS informático, no un profesor ni un asistente de chat. "
+            "Tu única tarea es leer el historial de conversación adjunto y devolver un OBJETO JSON VÁLIDO "
+            "con las métricas de auditoría (temas, dificultad, alertas, etc.). "
+            "BAJO NINGÚN CONCEPTO debes continuar la conversación, ni responder a las preguntas del historial, "
+            "ni dar saludos. Devuelve SOLO el código JSON."
+        )
+
+        mensaje_usuario = (
+            "Analiza este historial y devuelve el JSON:\n\n"
+            f"<historial>\n{resumen_datos}\n</historial>"
+        )
+
         payload = {
             "model": MODEL_ID,
-            "messages": [{"role": "user", "content": resumen_datos}],
+            "messages": [
+                {"role": "system", "content": mensaje_sistema},
+                {"role": "user", "content": mensaje_usuario}
+            ],
             "stream": False,
             "temperature": 0.1
         }
@@ -130,9 +156,9 @@ async def process_json(file: UploadFile = File(...)):
             )
 
         result = response.json()
-        respuesta_ia = result["choices"][0]["message"]["content"]
+        respuesta_ia = result["choices"][0]["message"]["content"].strip()
 
-        return {"content": respuesta_ia}
+        return {"content": respuesta_ia.strip()}
 
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="El archivo no es un JSON válido")
