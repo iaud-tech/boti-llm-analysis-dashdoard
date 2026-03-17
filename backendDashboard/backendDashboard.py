@@ -215,8 +215,10 @@ async def process_json(file: UploadFile = File(...)):
         # 2. Filtramos la "basura" y nos quedamos solo con los guiones de chat
         texto_limpio = extraer_conversaciones_limpias(raw_data)
 
+        # 3. Recortamos a 15000 caracteres
+        resumen_datos = texto_limpio[:15000]
 
-        if not texto_limpio.strip():
+        if not resumen_datos.strip():
             raise HTTPException(
                 status_code=400,
                 detail="No se encontró texto de chat válido en el archivo. ¿Estás seguro de que es una exportación de chats?"
@@ -245,7 +247,7 @@ async def process_json(file: UploadFile = File(...)):
             "Analiza este historial y devuelve el JSON con la estructura esperada. "
             "Recuerda: no calcules las metricas_generales reales; deja esos dos valores a 0 "
             "porque se sustituirán en backend.\n\n"
-            f"<historial>\n{texto_limpio}\n</historial>"
+            f"<historial>\n{resumen_datos}\n</historial>"
         )
 
         payload = {
